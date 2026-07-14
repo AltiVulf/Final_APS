@@ -24,6 +24,7 @@ import scipy.stats as stats
 import numpy as np
 from pytc2.sistemas_lineales import plot_plantilla # Plantilla de diseño para filtros FIR 
 from matplotlib import patches # Para poder hacer el diagrama de polos y ceros de los filtros
+import networkx as nx
 
 #%%############
 ## Funciones ##
@@ -490,7 +491,7 @@ def aplicar_filtros_sos(lista_sujetos, dict_crudo, sos, nombres_bandas):
             
     return dict_filtrado
 
-def matriz_conectividad_PLI(lista_sujetos, dict_filtrado, banda, fmin, fmax, fs=250, segundos_epoca=2):
+def matriz_conectividad_PLI(lista_sujetos, dict_filtrado, banda, fmin, fmax, fs=250, segundos_epoca=5):
     """
     Descripción: Calcula las matrices de conectividad simétricas (PLI) para un grupo de sujetos.
     
@@ -635,3 +636,102 @@ def limpiar_artefactos_ica(lista_sujetos, dict_crudo, fs):
         print(f"[{sujeto}] ICA completado: Se borraron {len(indices_malos)} componentes de parpadeo.")
         
     return dict_limpio
+
+def analisis_redes(M):
+    """
+    Descripción: Binariza una matriz tomando en cuenta el 30% de los enlaces más fuertes.
+    Convierte esa matriz binarizada en un grafo y analiza sus características.
+    """
+    umbral = np.percentile(M, 70)
+    
+    M_bin = (M > umbral).astype(int)
+    
+    G = nx.from_numpy_array(M_bin)
+    
+    Edges = G.number_of_edges()
+    BC = nx.betweenness_centrality(G)
+    Clust = nx.clustering(G)
+    
+    return M_bin, G, Edges, BC, Clust
+
+def binarizar_matriz_subrogados(datos_3d, matriz_pli_real, fs, fmin, fmax, n_subrogados=100, alpha=0.05):
+    """
+    Descripción: Determina la significancia estadística de los valores de conectividad (PLI)
+    mediante la generación de datos subrogados (aleatorización de fase).
+
+    Entradas:
+    - datos_3d: Matriz de épocas original (n_epocas, 19_canales, muestras_por_epoca).
+    - matriz_pli_real: Matriz de adyacencia (19x19) original obtenida de datos_3d.
+    - fs, fmin, fmax: Parámetros frecuenciales para calcular el PLI.
+    - n_subrogados: Cantidad de iteraciones nulas (100 según protocolo estándar).
+    - alpha: Nivel de significancia estadístico (típicamente 0.05).
+
+    Salida:
+    - matriz_binaria: Matriz 19x19 de unos y ceros (enlaces estadísticamente significativos).
+    - matriz_p_values: Matriz 19x19 con el valor p exacto de cada enlace.
+    """
+    n_epocas, n_canales, n_muestras = datos_3d.shape
+
+    # Matriz para guardar los resultados nulos: (100, 19, 19)
+    pli_nulos = np.zeros((n_subrogados, n_canales, n_canales))
+
+    for i in range(n_subrogados):
+        # 1. Aplicamos FFT estricta para números reales sobre el eje del tiempo
+        datos_fft = np.fft.rfft(datos_3d, axis=-1)
+
+        # 2. Generamos ruido de fase uniforme entre 0 y 2*pi
+        fases_aleatorias = np.random.uniform(0, 2*np.pi, datos_fft.shape)
+
+        # 3. Mantenemos el módulo (amplitud original) y le incrustamos la fase falsa
+        datos_fft_subrogados = np.abs(datos_fft) * np.exp(1j * fases_aleatorias)
+
+        # 4. Volvemos al dominio del tiempo con la Transformada Inversa
+        datos_3d_subrogados = np.fft.irfft(datos_fft_subrogados, n=n_muestras, axis=-1)
+
+        # 5. Calculamos el PLI para esta iteración de puro azar
+        resultado_sub = spectral_connectivity_epochs(
+            data=datos_3d_subrogados, method='pli', sfreq=fs,
+            fmin=fmin, fmax=fmax, faverage=True, verbose=False
+        )
+
+        # Extraemos y espejamos la matriz como en el pipeline original
+        matriz_mne_sub = resultado_sub.get_data(output='dense')[:, :, 0]
+        matriz_simetrica_sub = matriz_mne_sub + matriz_mne_sub.T
+
+        pli_nulos[i, :, :] = matriz_simetrica_sub
+
+    # --- Cálculo de la Significancia (p-value) ---
+    # Contamos cuántas veces el azar generó un PLI mayor o igual al real de nuestro paciente
+    # axis=0 suma a lo largo de las 100 "capas" subrogadas
+    conteos_superiores = np.sum(pli_nulos >= matriz_pli_real, axis=0)
+
+    # Dividimos por N iteraciones para obtener la probabilidad p
+    matriz_p_values = conteos_superiores / n_subrogados
+
+    # Binarizamos: Solo sobrevive el enlace (1) si p < alpha
+    matriz_binaria = (matriz_p_values < alpha).astype(int)
+
+    np.fill_diagonal(matriz_binaria, 0)
+
+    return matriz_binaria, matriz_p_values
+
+def procesar_y_extraer_subrogados(datos_filtrados_sujeto, banda, matriz_pli_real, fs, fmin, fmax, muestras_por_epoca):
+    # Cortamos en épocas la señal continua filtrada del paciente específico
+    datos_banda = datos_filtrados_sujeto[banda]
+    n_epocas = datos_banda.shape[1] // muestras_por_epoca
+    datos_recortados = datos_banda[:, :n_epocas * muestras_por_epoca]
+    datos_3d = datos_recortados.reshape(19, n_epocas, muestras_por_epoca).transpose(1, 0, 2)
+    
+    # Aplicamos el motor matemático subrogado
+    M_bin, p_values = binarizar_matriz_subrogados(
+        datos_3d=datos_3d, matriz_pli_real=matriz_pli_real, 
+        fs=fs, fmin=fmin, fmax=fmax, n_subrogados=100, alpha=0.05
+    )
+    
+    # Extraemos métricas topológicas
+    G = nx.from_numpy_array(M_bin)
+    Edges = G.number_of_edges()
+    BC = nx.betweenness_centrality(G)
+    Clust = nx.clustering(G)
+    
+    return M_bin, p_values, G, Edges, BC, Clust

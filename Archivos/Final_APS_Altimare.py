@@ -18,6 +18,7 @@ from funciones import (
     sns,
     stats,
     spectral_connectivity_epochs,
+    nx,
     
     # Funciones
     EDF_to_RAW,
@@ -32,7 +33,10 @@ from funciones import (
     aplicar_filtros_ab,
     aplicar_filtros_sos,
     matriz_conectividad_PLI,
-    limpiar_artefactos_ica
+    limpiar_artefactos_ica,
+    analisis_redes,
+    binarizar_matriz_subrogados,
+    procesar_y_extraer_subrogados
 )
 
 # %% --- Variables Globales ---
@@ -240,6 +244,8 @@ plt.xlim([0,45])
 # %% --- Análisis espectral en una banda - Comparativa entre filtros ---
 bnd = 0 # Eligo la banda que quiero plotear
 
+f_low, f_high = bandas_eeg[bandas[bnd]]
+
 eeg_filtrado_banda_butter = sig.filtfilt(b = b_butter[bnd], a = a_butter[bnd], x = datos_canal_crudos)
 eeg_filtrado_banda_cheby = sig.sosfiltfilt(sos=sos_cheby[bnd], x = datos_canal_crudos)
 
@@ -250,16 +256,16 @@ f_cheby, Px_cheby = welch(cant_promedio = 10, vector = eeg_filtrado_banda_cheby,
 plt.plot(f_crudo, 10*np.log10(Px_crudo + 1e-15), label='PSD crudo', color='lightgray')
 plt.plot(f_butter, 10*np.log10(Px_butter + 1e-15), label=f'Filtrada con filtro {bandas[bnd]} Butterworth', linewidth=1.5)
 plt.plot(f_cheby, 10*np.log10(Px_cheby + 1e-15), label=f'Filtrada con filtro {bandas[bnd]} Chebyshev II', linewidth=1.5)
-plt.axvline(x=2, color='red', linestyle=':', linewidth=2)
-plt.axvline(x=4, color='red', linestyle=':', linewidth=2)
-plt.title('Análisis espectral de PSD: Comparativa entre filtros', fontsize = 20)
+plt.axvline(x=f_low, color='red', linestyle=':', linewidth=2)
+plt.axvline(x=f_high, color='red', linestyle=':', linewidth=2)
+plt.title(f'Análisis espectral de PSD: Comparativa entre filtros - Banda {bandas[bnd]}', fontsize = 20)
 plt.xlabel('Frecuencia [Hz]', fontsize = 18)
 plt.ylabel('PSD [dB]', fontsize = 18)
 plt.legend(fontsize = 14, loc = 'upper right')
 plt.grid(True)
 plt.tick_params(axis='both', labelsize=14)
-plt.xlim([1,5])
-#plt.ylim([0,3*10**(-11)])
+plt.xlim([f_low-1, f_high+1])
+plt.ylim([-150,-100])
 plt.show()
     
 # %% --- Análisis de Energías ---
@@ -315,14 +321,14 @@ eeg_filtrado_esquizofrenia_cheby = aplicar_filtros_sos(lista_sujetos = sujetos_s
 
 # %% --- Configuro banda de matrices de conectividad - Comparativa entre filtros ---
 banda = 'Delta'
-
-sujeto = 'h01' # Sujeto
 fmin, fmax = bandas_eeg[banda] # Frecuencias de corte de la banda
+
+sujeto = 'h01' # Sujeto para las figuras de un unico sujeto
 
 matriz_filtrada = eeg_filtrado_sanos_butter[sujeto][banda]
 
 # Corto la señal continua en "Épocas" 
-segundos_por_epoca = 30 # Definido a partir del estudio
+segundos_por_epoca = 5 # Definido a partir de la duración en segundos del EEG más corto: buscando tener más de 100 epocas por señal 
 muestras_por_epoca = segundos_por_epoca * fs 
 
 # %% --- Matríz de conectividad para 1 sujeto y 1 banda - Butter ---
@@ -348,12 +354,12 @@ resultado_conectividad = spectral_connectivity_epochs(
 
 # El argumento 'dense' devuelve la matriz cuadrada completa
 matriz_adyacencia = resultado_conectividad.get_data(output='dense')[:, :, 0]
-matriz_adyacencia = matriz_adyacencia + matriz_adyacencia.T # Le sumo la transpuesta para que me grafique toda la matriz
+matriz_adyacencia_butter = matriz_adyacencia + matriz_adyacencia.T # Le sumo la transpuesta para que me grafique toda la matriz
 
 # Visualización
 plt.figure(figsize=(10, 8))
 sns.heatmap(
-    matriz_adyacencia, 
+    matriz_adyacencia_butter, 
     xticklabels=canales, 
     yticklabels=canales, 
     cmap='jet', 
@@ -392,12 +398,12 @@ resultado_conectividad = spectral_connectivity_epochs(
 )
 
 matriz_adyacencia = resultado_conectividad.get_data(output='dense')[:, :, 0]
-matriz_adyacencia = matriz_adyacencia + matriz_adyacencia.T # Le sumo la transpuesta para que me grafique toda la matriz
+matriz_adyacencia_cheby = matriz_adyacencia + matriz_adyacencia.T # Le sumo la transpuesta para que me grafique toda la matriz
 
 # Visualización
 plt.figure(figsize=(10, 8))
 sns.heatmap(
-    matriz_adyacencia, 
+    matriz_adyacencia_cheby, 
     xticklabels=canales, 
     yticklabels=canales, 
     cmap='jet', 
@@ -412,10 +418,34 @@ plt.xlabel('Canales')
 plt.ylabel('Canales')
 plt.show()
 
+# %% --- Visualización de matrices: Sujeto H01 con Butter vs Cheby en una unica banda de frecuencias ---
+fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+# Heatmap Sanos
+sns.heatmap(
+    matriz_adyacencia_butter, xticklabels=canales, yticklabels=canales, 
+    cmap='jet', vmin=0, vmax=0.3, square=True, linewidths=0.5, ax=axes[0]
+)
+axes[0].set_title(f'Matriz de Conectividad - Sujeto H01 - PLI {banda} - Butter', fontsize = 16)
+axes[0].set_xlabel('Canales', fontsize = 14)
+axes[0].set_ylabel('Canales', fontsize = 14)
+
+# Heatmap Esquizofrenia
+sns.heatmap(
+    matriz_adyacencia_cheby, xticklabels=canales, yticklabels=canales, 
+    cmap='jet', vmin=0, vmax=0.3, square=True, linewidths=0.5, ax=axes[1]
+)
+axes[1].set_title(f'Matriz de Conectividad - Sujeto H01 - PLI {banda} - Cheby', fontsize = 16)
+axes[1].set_xlabel('Canales', fontsize = 14)
+axes[1].set_ylabel('Canales', fontsize = 14)
+
+plt.tight_layout()
+plt.show()
+
 # %% --- Matriz de conectividad para 14 Sanos vs 14 Esquizofrenia en 1 banda - Butter ---
 
-matrices_PLI_sanos_butter = matriz_conectividad_PLI(sujetos_h, eeg_filtrado_sanos_butter, banda, fmin, fmax)
-matrices_PLI_esquizofrenia_butter = matriz_conectividad_PLI(sujetos_s, eeg_filtrado_esquizofrenia_butter, banda, fmin, fmax)
+matrices_PLI_sanos_butter = matriz_conectividad_PLI(sujetos_h, eeg_filtrado_sanos_butter, banda, fmin, fmax, segundos_epoca=segundos_por_epoca)
+matrices_PLI_esquizofrenia_butter = matriz_conectividad_PLI(sujetos_s, eeg_filtrado_esquizofrenia_butter, banda, fmin, fmax, segundos_epoca=segundos_por_epoca)
 
 # %% --- Visualización de un cerebro 'promedio' sano vs esquizofrenia - Butter ---
 promedio_sanos_butter = np.mean(matrices_PLI_sanos_butter, axis=0)
@@ -448,8 +478,8 @@ plt.show()
 
 # %% --- Matriz de conectividad para 14 Sanos vs 14 Esquizofrenia en 1 banda - Chebyshev II ---
 
-matrices_PLI_sanos_cheby = matriz_conectividad_PLI(sujetos_h, eeg_filtrado_sanos_cheby, banda, fmin, fmax)
-matrices_PLI_esquizofrenia_cheby = matriz_conectividad_PLI(sujetos_s, eeg_filtrado_esquizofrenia_cheby, banda, fmin, fmax)
+matrices_PLI_sanos_cheby = matriz_conectividad_PLI(sujetos_h, eeg_filtrado_sanos_cheby, banda, fmin, fmax, segundos_epoca = segundos_por_epoca)
+matrices_PLI_esquizofrenia_cheby = matriz_conectividad_PLI(sujetos_s, eeg_filtrado_esquizofrenia_cheby, banda, fmin, fmax, segundos_epoca = segundos_por_epoca)
 
 # %% --- Visualización de un cerebro 'promedio' sano vs esquizofrenia - Chebyshev II ---
 
@@ -480,3 +510,370 @@ axes[1].set_ylabel('Canales')
 plt.tight_layout()
 plt.show()
 
+# %% --- Análisis de Redes para 1 banda de frecuencias tomando 30% de uniones más fuertes ---
+print(f">> Realizando analisis de redes para la banda {banda}")
+
+datos_sujetos = {} # Aca voy a guardar los datos del análisis para todos los sujetos
+
+# Matrices binarizadas separadas por filtro utilizado y población
+matrices_PLI_sanos_butter_bin = {} 
+matrices_PLI_esquizofrenia_butter_bin = {}
+matrices_PLI_sanos_cheby_bin = {}
+matrices_PLI_esquizofrenia_cheby_bin = {}
+
+posiciones_electrodos = {
+    'Fp1': (-1.5, 3), 'Fp2': (1.5, 3),
+    'F7':  (-3, 2),   'F3':  (-1.5, 2), 'Fz': (0, 2),   'F4': (1.5, 2),  'F8': (3, 2),
+    'T3':  (-3, 0),   'C3':  (-1.5, 0), 'Cz': (0, 0),   'C4': (1.5, 0),  'T4': (3, 0),
+    'T5':  (-3, -2),  'P3':  (-1.5, -2),'Pz': (0, -2),  'P4': (1.5, -2), 'T6': (3, -2),
+    'O1':  (-1.5, -3),'O2':  (1.5, -3)
+} # Sirve para plotear los grafos con la misma disposición que los electrodos
+
+eje_x = len(canales)
+
+for i in range(14):
+    M_bin, G, Edges, BC, Clust = analisis_redes(matrices_PLI_sanos_butter[i])
+    
+    datos_sujetos[f'Sujeto_H{i+1:02d}_Butter'] = {
+        'M_bin': M_bin,
+        'G': G,
+        'Edges': Edges,
+        'BC': BC,
+        'Clust': Clust,
+    }
+    
+    print(f"Sujeto H{i+1:02d} - Butter procesado: {Edges} enlaces")
+    
+    M_bin, G, Edges, BC, Clust = analisis_redes(matrices_PLI_sanos_cheby[i])
+    
+    datos_sujetos[f'Sujeto_H{i+1:02d}_Cheby'] = {
+        'M_bin': M_bin,
+        'G': G,
+        'Edges': Edges,
+        'BC': BC,
+        'Clust': Clust,
+    }
+    
+    print(f"Sujeto H{i+1:02d} - Cheby procesado: {Edges} enlaces")
+    
+    M_bin, G, Edges, BC, Clust = analisis_redes(matrices_PLI_esquizofrenia_butter[i])
+    
+    datos_sujetos[f'Sujeto_S{i+1:02d}_Butter'] = {
+        'M_bin': M_bin,
+        'G': G,
+        'Edges': Edges,
+        'BC': BC,
+        'Clust': Clust,
+    }
+    
+    print(f"Sujeto S{i+1:02d} - Butter procesado: {Edges} enlaces")
+    
+    M_bin, G, Edges, BC, Clust = analisis_redes(matrices_PLI_esquizofrenia_cheby[i])
+    
+    datos_sujetos[f'Sujeto_S{i+1:02d}_Cheby'] = {
+        'M_bin': M_bin,
+        'G': G,
+        'Edges': Edges,
+        'BC': BC,
+        'Clust': Clust,
+    }
+    
+    print(f"Sujeto S{i+1:02d} - Cheby procesado: {Edges} enlaces")
+    
+    # Llaves para tomar los datos dentro del diccionario 'datos_sujetos'
+    llave_paciente_h_butter = f'Sujeto_H{i+1:02d}_Butter'
+    llave_paciente_h_cheby = f'Sujeto_H{i+1:02d}_Cheby'
+    llave_paciente_s_butter = f'Sujeto_S{i+1:02d}_Butter'
+    llave_paciente_s_cheby = f'Sujeto_S{i+1:02d}_Cheby'
+    
+    Edges_h_butter = datos_sujetos[llave_paciente_h_butter]['Edges']
+    Edges_h_cheby = datos_sujetos[llave_paciente_h_cheby]['Edges']
+    Edges_s_butter = datos_sujetos[llave_paciente_s_butter]['Edges']
+    Edges_s_cheby = datos_sujetos[llave_paciente_s_cheby]['Edges']
+    
+    print(f'Para el sujeto H{i+1:02d}, la cantidad de enlaces es de: {Edges_h_butter} enlaces con Butter y {Edges_h_cheby} enlaces con Cheby')
+    print(f'Para el sujeto S{i+1:02d}, la cantidad de enlaces es de: {Edges_s_butter} enlaces con Butter y {Edges_s_cheby} enlaces con Cheby')
+    
+    # # %% --- Visualización de Grafos ---
+    
+    # # Agarro los grafos de los sujetos de control
+    # G_h_butter = datos_sujetos[llave_paciente_h_butter]['G']
+    # G_h_cheby = datos_sujetos[llave_paciente_h_cheby]['G']
+    
+    # # Sujetos con esquizofrenia
+    # G_s_butter = datos_sujetos[llave_paciente_s_butter]['G']
+    # G_s_cheby = datos_sujetos[llave_paciente_s_cheby]['G']
+    
+    # # Configuracion para las posiciones de los nodos
+    # mapeo_nombres = {j: canales[j] for j in range(len(canales))}
+    
+    # G_h_butter_etiq = nx.relabel_nodes(G_h_butter, mapeo_nombres)
+    # G_h_cheby_etiq = nx.relabel_nodes(G_h_cheby, mapeo_nombres)
+    # G_s_butter_etiq = nx.relabel_nodes(G_s_butter, mapeo_nombres)
+    # G_s_cheby_etiq = nx.relabel_nodes(G_s_cheby, mapeo_nombres)
+    
+    # # FIGURA 1: Sujeto H'XX'
+    # fig_h, (ax1_h, ax2_h) = plt.subplots(1, 2, figsize=(14, 7))
+    # fig_h.suptitle(f"Comparativa de Redes Funcionales - Sujeto Control H{i+1:02d}", fontsize=18)
+    
+    # # Subplot Izquierdo: Butterworth
+    # nx.draw_networkx(
+    #     G_h_butter_etiq, pos=posiciones_electrodos, ax=ax1_h,
+    #     with_labels=True, node_color='#4F81BD', node_size=900,
+    #     font_size=10, edge_color='gray', width=1.5
+    # )
+    # ax1_h.set_title("Filtro Butterworth", fontsize=15)
+    # ax1_h.axis('off')
+    # ax1_h.set_xlim(-4, 4); ax1_h.set_ylim(-4, 3.5)
+
+    # # Subplot Derecho: Chebyshev II
+    # nx.draw_networkx(
+    #     G_h_cheby_etiq, pos=posiciones_electrodos, ax=ax2_h,
+    #     with_labels=True, node_color='#C0504D', node_size=900,
+    #     font_size=10, edge_color='gray', width=1.5
+    # )
+    # ax2_h.set_title("Filtro Chebyshev II", fontsize=15)
+    # ax2_h.axis('off')
+    # ax2_h.set_xlim(-4, 4); ax2_h.set_ylim(-4, 3.5)
+
+    # plt.tight_layout()
+    # plt.show()
+
+    # # FIGURA 2: Sujeto con esquizofrenia
+    # fig_s, (ax1_s, ax2_s) = plt.subplots(1, 2, figsize=(14, 7))
+    # fig_s.suptitle(f"Comparativa de Redes Funcionales - Sujeto Esquizofrenia S{i+1:02d}", fontsize=18)
+    
+    # # Subplot Izquierdo: Butterworth
+    # nx.draw_networkx(
+    #     G_s_butter_etiq, pos=posiciones_electrodos, ax=ax1_s,
+    #     with_labels=True, node_color='#4F81BD', node_size=900,
+    #     font_size=10, edge_color='gray', width=1.5
+    # )
+    # ax1_s.set_title("Filtro Butterworth", fontsize=15)
+    # ax1_s.axis('off')
+    # ax1_s.set_xlim(-4, 4); ax1_s.set_ylim(-4, 3.5)
+
+    # # Subplot Derecho: Chebyshev II 
+    # nx.draw_networkx(
+    #     G_s_cheby_etiq, pos=posiciones_electrodos, ax=ax2_s,
+    #     with_labels=True, node_color='#C0504D', node_size=900,
+    #     font_size=10, edge_color='gray', width=1.5
+    # )
+    # ax2_s.set_title("Filtro Chebyshev II", fontsize=15)
+    # ax2_s.axis('off')
+    # ax2_s.set_xlim(-4, 4); ax2_s.set_ylim(-4, 3.5)
+
+    # plt.tight_layout()
+    # plt.show()
+    
+
+# %% --- Visualización de matrices binarizadas (para 1 sujeto y 1 banda) ---
+# sujeto = 3
+# filtro = 'Cheby'
+# llave = f'Sujeto_H{sujeto:02d}_{filtro}'
+# plt.figure(figsize=(10, 8))
+# sns.heatmap(
+#     data=datos_sujetos[llave]['M_bin'], 
+#     xticklabels=canales, 
+#     yticklabels=canales, 
+#     cmap='jet', 
+#     vmin=0, # El PLI va de 0 (nula sincronía con retraso) a 1 (sincronía perfecta)
+#     vmax=1, 
+#     square=True,
+#     linewidths=0.5
+# )
+# plt.title('Matriz de Adyacencia (PLI) Binarizada - Chebyshev tipo II')
+# plt.xlabel('Canales')
+# plt.ylabel('Canales')
+# plt.show()
+
+# # %% --- Visualización Grafos (para todos los sujetos de una banda y 1 población) ---
+# mapeo_nombres = {i: canales[i] for i in range(len(canales))}
+
+# i = 0
+# llave_paciente = f'Paciente_sano_{i}'
+
+# G = analisis_redes[llave_paciente]['G']
+
+# G_etiquetado = nx.relabel_nodes(G, mapeo_nombres)
+
+# plt.figure(figsize=(8, 8))
+# plt.title(f'Red de Conectividad Funcional - Sujeto H{i+1:02d}', fontsize=19)
+
+# nx.draw_networkx(
+#     G_etiquetado,
+#     pos=posiciones_electrodos,
+#     with_labels=True,
+#     node_color='lightblue',
+#     node_size=1000,
+#     font_size=10,
+#     font_weight='bold',
+#     edge_color='gray',
+#     width=1.5, # Grosor de las conexiones
+#     alpha=0.9
+# )
+
+# plt.axis('off')
+
+# plt.xlim(-4, 4)
+# plt.ylim(-4, 4)
+
+# plt.tight_layout()
+# plt.show()
+
+
+# %% --- Análisis Estadístico con método de análisis de datos subrogados ---
+datos_sujetos_estadisticos = {}
+
+for i in range(14):
+
+    llave_h = f'h{i+1:02d}'
+    llave_s = f's{i+1:02d}'
+    
+    print(f"\n--- Analizando Sujeto H{i+1:02d} ---")
+    
+    # Sano - Butterworth
+    M_bin, P_val, G, Edges, BC, Clust = procesar_y_extraer_subrogados(
+        eeg_filtrado_sanos_butter[llave_h], banda, matrices_PLI_sanos_butter[i], fs, fmin, fmax, muestras_por_epoca
+    )
+    datos_sujetos_estadisticos[f'Sujeto_H{i+1:02d}_Butter'] = {'M_bin': M_bin, 'p_values': P_val, 'G': G, 'Edges': Edges, 'BC': BC, 'Clust': Clust}
+    print(f" > Butter procesado: {Edges} enlaces significativos")
+    
+    # Sano - Chebyshev
+    M_bin, P_val, G, Edges, BC, Clust = procesar_y_extraer_subrogados(
+        eeg_filtrado_sanos_cheby[llave_h], banda, matrices_PLI_sanos_cheby[i], fs, fmin, fmax, muestras_por_epoca
+    )
+    datos_sujetos_estadisticos[f'Sujeto_H{i+1:02d}_Cheby'] = {'M_bin': M_bin, 'p_values': P_val, 'G': G, 'Edges': Edges, 'BC': BC, 'Clust': Clust}
+    print(f" > Cheby procesado: {Edges} enlaces significativos")
+    
+    print(f"--- Analizando Sujeto S{i+1:02d} ---")
+    
+    # Esquizofrenia - Butterworth
+    M_bin, P_val, G, Edges, BC, Clust = procesar_y_extraer_subrogados(
+        eeg_filtrado_esquizofrenia_butter[llave_s], banda, matrices_PLI_esquizofrenia_butter[i], fs, fmin, fmax, muestras_por_epoca
+    )
+    datos_sujetos_estadisticos[f'Sujeto_S{i+1:02d}_Butter'] = {'M_bin': M_bin, 'p_values': P_val, 'G': G, 'Edges': Edges, 'BC': BC, 'Clust': Clust}
+    print(f" > Butter procesado: {Edges} enlaces significativos")
+    
+    # Esquizofrenia - Chebyshev
+    M_bin, P_val, G, Edges, BC, Clust = procesar_y_extraer_subrogados(
+        eeg_filtrado_esquizofrenia_cheby[llave_s], banda, matrices_PLI_esquizofrenia_cheby[i], fs, fmin, fmax, muestras_por_epoca
+    )
+    datos_sujetos_estadisticos[f'Sujeto_S{i+1:02d}_Cheby'] = {'M_bin': M_bin, 'p_values': P_val, 'G': G, 'Edges': Edges, 'BC': BC, 'Clust': Clust}
+    print(f" > Cheby procesado: {Edges} enlaces significativos")
+
+# %% --- VISUALIZACIÓN DE GRAFOS ---
+# Configuracion para las posiciones de los nodos
+mapeo_nombres = {j: canales[j] for j in range(len(canales))}
+sujeto = 0
+G_h_butter = list(datos_sujetos_estadisticos[f'Sujeto_H{sujeto+1:02d}_Butter']['G'].values())
+G_h_cheby = list(datos_sujetos_estadisticos[f'Sujeto_H{sujeto+1:02d}_Cheby']['G'].values())
+G_s_butter = list(datos_sujetos_estadisticos[f'Sujeto_S{sujeto+1:02d}_Butter']['G'].values())
+G_s_cheby = list(datos_sujetos_estadisticos[f'Sujeto_S{sujeto+1:02d}_Cheby']['G'].values())
+
+G_h_butter_etiq = nx.relabel_nodes(G_h_butter, mapeo_nombres)
+G_h_cheby_etiq = nx.relabel_nodes(G_h_cheby, mapeo_nombres)
+G_s_butter_etiq = nx.relabel_nodes(G_s_butter, mapeo_nombres)
+G_s_cheby_etiq = nx.relabel_nodes(G_s_cheby, mapeo_nombres)
+
+# FIGURA 1: Sujeto H'XX'
+fig_h, (ax1_h, ax2_h) = plt.subplots(1, 2, figsize=(14, 7))
+fig_h.suptitle(f"Comparativa de Redes Funcionales - Sujeto Control H{i+1:02d}", fontsize=18)
+
+# Subplot Izquierdo: Butterworth
+nx.draw_networkx(
+    G_h_butter_etiq, pos=posiciones_electrodos, ax=ax1_h,
+    with_labels=True, node_color='#4F81BD', node_size=900,
+    font_size=10, edge_color='gray', width=1.5
+)
+ax1_h.set_title("Filtro Butterworth", fontsize=15)
+ax1_h.axis('off')
+ax1_h.set_xlim(-4, 4); ax1_h.set_ylim(-4, 3.5)
+
+# Subplot Derecho: Chebyshev II
+nx.draw_networkx(
+    G_h_cheby_etiq, pos=posiciones_electrodos, ax=ax2_h,
+    with_labels=True, node_color='#C0504D', node_size=900,
+    font_size=10, edge_color='gray', width=1.5
+)
+ax2_h.set_title("Filtro Chebyshev II", fontsize=15)
+ax2_h.axis('off')
+ax2_h.set_xlim(-4, 4); ax2_h.set_ylim(-4, 3.5)
+
+plt.tight_layout()
+plt.show()
+
+# FIGURA 2: Sujeto con esquizofrenia
+fig_s, (ax1_s, ax2_s) = plt.subplots(1, 2, figsize=(14, 7))
+fig_s.suptitle(f"Comparativa de Redes Funcionales - Sujeto Esquizofrenia S{i+1:02d}", fontsize=18)
+
+# Subplot Izquierdo: Butterworth
+nx.draw_networkx(
+    G_s_butter_etiq, pos=posiciones_electrodos, ax=ax1_s,
+    with_labels=True, node_color='#4F81BD', node_size=900,
+    font_size=10, edge_color='gray', width=1.5
+)
+ax1_s.set_title("Filtro Butterworth", fontsize=15)
+ax1_s.axis('off')
+ax1_s.set_xlim(-4, 4); ax1_s.set_ylim(-4, 3.5)
+
+# Subplot Derecho: Chebyshev II 
+nx.draw_networkx(
+    G_s_cheby_etiq, pos=posiciones_electrodos, ax=ax2_s,
+    with_labels=True, node_color='#C0504D', node_size=900,
+    font_size=10, edge_color='gray', width=1.5
+)
+ax2_s.set_title("Filtro Chebyshev II", fontsize=15)
+ax2_s.axis('off')
+ax2_s.set_xlim(-4, 4); ax2_s.set_ylim(-4, 3.5)
+
+plt.tight_layout()
+plt.show()
+
+print("\n>> ¡Análisis de subrogados completado exitosamente!")
+
+# %% --- Duracion de las imagenes EEG en tiempo (para definir la cantidad de segundos por época) ---
+duraciones_h = []
+duraciones_s = []
+
+for i in range(1, 15):
+    id_h = f'h{i:02d}'
+    id_s = f's{i:02d}'
+    
+    duraciones_h.append(sujetos_sanos[id_h].times[-1])
+    duraciones_s.append(sujetos_con_esquizofrenia[id_s].times[-1])
+
+# --- Visualización ---
+plt.figure(figsize=(14, 6))
+x = np.arange(14)
+width = 0.35
+
+plt.bar(x - width/2, duraciones_h, width, label='Control (Sanos)', color='lightblue', edgecolor='black')
+plt.bar(x + width/2, duraciones_s, width, label='Esquizofrenia', color='lightcoral', edgecolor='black')
+
+plt.title('Duración Total de los Registros EEG por Sujeto', fontsize=18, fontweight='bold')
+plt.ylabel('Duración (Segundos)', fontsize=14)
+plt.xlabel('Número de Sujeto (01 al 14)', fontsize=14)
+
+plt.xticks(x, [f'{i+1:02d}' for i in range(14)], fontsize=12)
+
+plt.axhline(300, color='red', linestyle='--', alpha=0.7, label='5 Minutos (300 s)')
+plt.axhline(900, color='green', linestyle='--', alpha=0.7, label='15 Minutos (900 s)')
+
+plt.legend(fontsize=12, loc='upper right')
+plt.grid(axis='y', ls=':', alpha=0.7)
+plt.tight_layout()
+plt.show()
+
+# --- Consola ---
+min_h = min(duraciones_h)
+min_s = min(duraciones_s)
+min_absoluto = min(min_h, min_s)
+
+print(f"Duración máxima (Sanos): {max(duraciones_h):.2f} s")
+print(f"Duración máxima (Esquizofrenia): {max(duraciones_s):.2f} s")
+print("-" * 30)
+print(f"Duración mínima (Sanos): {min_h:.2f} s")
+print(f"Duración mínima (Esquizofrenia): {min_s:.2f} s")
+print("-" * 30)
+print(f">> EL REGISTRO MÁS CORTO DURA: {min_absoluto:.2f} segundos.")
