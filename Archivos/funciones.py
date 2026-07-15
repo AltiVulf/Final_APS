@@ -15,15 +15,12 @@ import os # Se usa en EDF_to_RAW
 import mne # https://mne.tools/stable/index.html
 from mne_connectivity import spectral_connectivity_epochs
 from mne.preprocessing import ICA # Para eliminar los artefactos (principalmente ruidos por pestañeo)
-from mne.viz import plot_filter
-from mne.filter import create_filter
 import seaborn as sns # https://seaborn.pydata.org/generated/seaborn.heatmap.html
 import matplotlib.pyplot as plt
 import scipy.signal as sig
 import scipy.stats as stats
 import numpy as np
 from pytc2.sistemas_lineales import plot_plantilla # Plantilla de diseño para filtros FIR 
-from matplotlib import patches # Para poder hacer el diagrama de polos y ceros de los filtros
 import networkx as nx
 
 #%%############
@@ -187,9 +184,7 @@ def plotear_funcion_transferencia_ab(b, a, fs, xlim = None, ylim = None, label =
         fs_legend: Tamaño de la fuente para las leyendas.
         fs_ticks: Tamaño de la fuente para los números de los ejes.
     """
-    # --- Calculo polos y ceros ---
-    z, p, k = sig.tf2zpk(b, a) # Zpk = [ [z0,z1,...,zn], [p0,p1,...,pn], k]
-
+    
     # --- Módulo, Fase y Retardo de Fase ---
     f, h = sig.freqz(b, a, fs=fs) # worN = np.logspace(2,-2,1000) (dominio Z)
     phase = np.unwrap(np.angle(h)) # fase del grupo
@@ -268,29 +263,6 @@ def plotear_funcion_transferencia_ab(b, a, fs, xlim = None, ylim = None, label =
         plt.grid(True, which='both', ls=':')
         plt.legend(fontsize=fs_legend)
         figura+=1
-
-    # Diagrama de polos y ceros
-    if polos_y_ceros == True:
-        plt.figure(fig_inicial + figura, figsize = (5,5))
-        plt.title(f'Diagrama de Polos y Ceros de {label} (Plano Z)', fontsize=fs_title)
-        plt.xlabel('Eje Real', fontsize=fs_label)
-        plt.ylabel('Eje Imaginario', fontsize=fs_label)
-        plt.tick_params(axis='both', labelsize=fs_ticks)
-        
-        plt.plot(np.real(p), np.imag(p), 'x', markersize=10, label= f'Polos de {label}')
-        if len(z) > 0:
-            plt.plot(np.real(z), np.imag(z), 'o', markersize=10, fillstyle='none', label=f'Ceros de {label}')
-        plt.axhline(0, color='k', lw=0.5)
-        plt.axvline(0, color='k', lw=0.5)
-        
-        # Grafico el circulo unitario
-        unit_circle = patches.Circle((0, 0), radius=1, fill=False, color='gray', ls='dotted', lw=2)
-        axes_hdl = plt.gca()
-        axes_hdl.add_patch(unit_circle)
-
-        plt.axis([-1.1, 1.1, -1.1, 1.1])
-        plt.legend(fontsize=fs_legend)
-        plt.grid(True)
 
 def plotear_funcion_transferencia_sos(sos, fs, xlim = None, ylim = None, label = 'T(s)', polos_y_ceros = True, magnitud_fase_retardo = True, fig_inicial = 0, f_banda = None, fs_title=20, fs_label=18, fs_legend=14, fs_ticks=14):
     """
